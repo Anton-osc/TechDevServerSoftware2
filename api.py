@@ -73,3 +73,54 @@ def delete_category():
     del data["categories"][category_id]
     return "", 204
 
+@app.route("/record", methods=["POST"])
+def create_record():
+    global record_id_counter
+    user_id = request.json.get("user_id")
+    category_id = request.json.get("category_id")
+    amount = request.json.get("amount")
+    if not all([user_id, category_id, amount]):
+        return jsonify({"error": "User ID, Category ID, and Amount are required"}), 400
+    if user_id not in data["users"] or category_id not in data["categories"]:
+        return jsonify({"error": "Invalid User ID or Category ID"}), 400
+    record_id = record_id_counter
+    record = {
+        "id": record_id,
+        "user_id": user_id,
+        "category_id": category_id,
+        "timestamp": datetime.now().isoformat(),
+        "amount": amount,
+    }
+    data["records"][record_id] = record
+    record_id_counter += 1
+    return jsonify(record), 201
+
+@app.route("/record/<int:record_id>", methods=["GET"])
+def get_record(record_id):
+    record = data["records"].get(record_id)
+    if not record:
+        return jsonify({"error": "Record not found"}), 404
+    return jsonify(record)
+
+@app.route("/record/<int:record_id>", methods=["DELETE"])
+def delete_record(record_id):
+    if record_id not in data["records"]:
+        return jsonify({"error": "Record not found"}), 404
+    del data["records"][record_id]
+    return "", 204
+
+@app.route("/record", methods=["GET"])
+def get_records():
+    user_id = request.args.get("user_id", type=int)
+    category_id = request.args.get("category_id", type=int)
+
+    if user_id is None and category_id is None:
+        return jsonify({"error": "At least one filter parameter (user_id or category_id) is required"}), 400
+
+    filtered_records = [
+        record
+        for record in data["records"].values()
+        if (user_id is None or record["user_id"] == user_id)
+        and (category_id is None or record["category_id"] == category_id)
+    ]
+    return jsonify(filtered_records)
