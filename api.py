@@ -11,6 +11,15 @@ user_id_counter = 1
 category_id_counter = 1
 record_id_counter = 1
 
+@app.route("/healthcheck")
+def healthcheck():
+    current_time = datetime.now().isoformat()
+    response = {
+            'status': 'healthy',
+            'timestamp': current_time
+    }
+    return jsonify(response), 200
+
 
 @app.route("/user", methods=["POST"])
 def create_user():
