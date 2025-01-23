@@ -50,4 +50,26 @@ def delete_user(user_id):
 def get_users():
     return jsonify(list(data["users"].values()))
 
+@app.route("/category", methods=["POST"])
+def create_category():
+    global category_id_counter
+    name = request.json.get("name")
+    if not name:
+        return jsonify({"error": "Name is required"}), 400
+    category_id = category_id_counter
+    data["categories"][category_id] = {"id": category_id, "name": name}
+    category_id_counter += 1
+    return jsonify(data["categories"][category_id]), 201
+
+@app.route("/category", methods=["GET"])
+def get_categories():
+    return jsonify(list(data["categories"].values()))
+
+@app.route("/category", methods=["DELETE"])
+def delete_category():
+    category_id = request.json.get("id")
+    if not category_id or category_id not in data["categories"]:
+        return jsonify({"error": "Category not found"}), 404
+    del data["categories"][category_id]
+    return "", 204
 
