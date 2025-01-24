@@ -1,7 +1,9 @@
+
 # How to start
 - Make sure you have installed docker-compose
 - Clone this repo
 - Run `docker-compose up`
+### Calculate Lab3 variant 24 % 3 = 0 - Облік доходів
 ### Now you can send requests to api:
 #### User requests:
 - curl -X POST http://127.0.0.1:80/user -H "Content-Type: application/json" -d '{"name": "admin"}' (Create user)
