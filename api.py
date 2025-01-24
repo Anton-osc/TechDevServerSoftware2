@@ -1,126 +1,240 @@
-from app import app
+import os
 from flask import Flask, request, jsonify
+from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
+from marshmallow import Schema, fields, ValidationError
+from dotenv import load_dotenv
+from sqlalchemy import text
 
-data = {
-    "users": {},
-    "categories": {},
-    "records": {},
-}
-user_id_counter = 1
-category_id_counter = 1
-record_id_counter = 1
+load_dotenv()
 
-@app.route("/healthcheck")
-def healthcheck():
-    current_time = datetime.now().isoformat()
-    response = {
-            'status': 'healthy',
-            'timestamp': current_time
-    }
-    return jsonify(response), 200
+app = Flask(__name__)
 
+app.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://postgres:{os.getenv("POSTGRES_PASSWORD")}@db/{os.getenv("POSTGRES_DB")}'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
+
+class User(db.Model):
+    __tablename__ = 'users'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    account = db.relationship('Account', backref='user', uselist=False, cascade="all, delete-orphan")
+    records = db.relationship('Record', backref='user', lazy=True)
+
+    def __init__(self, name):
+        self.name = name
+
+class Account(db.Model):
+    __tablename__ = 'accounts'
+    id = db.Column(db.Integer, db.ForeignKey('users.id'), primary_key=True)
+    balance = db.Column(db.Float, default=0)
+
+    def __init__(self, balance=0):
+        self.balance = balance
+
+class Category(db.Model):
+    __tablename__ = 'categories'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+
+    def __init__(self, name):
+        self.name = name
+
+class Record(db.Model):
+    __tablename__ = 'records'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    category_id = db.Column(db.Integer, db.ForeignKey('categories.id'), nullable=False)
+    amount = db.Column(db.Float, nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def __init__(self, user_id, category_id, amount):
+        self.user_id = user_id
+        self.category_id = category_id
+        self.amount = amount
+
+class UserSchema(Schema):
+    id = fields.Int(dump_only=True)
+    name = fields.Str(required=True)
+
+class CategorySchema(Schema):
+    id = fields.Int(dump_only=True)
+    name = fields.Str(required=True)
+
+class RecordSchema(Schema):
+    id = fields.Int(dump_only=True)
+    user_id = fields.Int(required=True)
+    category_id = fields.Int(required=True)
+    amount = fields.Float(required=True)
+    timestamp = fields.DateTime(dump_only=True)
+
+class AccountSchema(Schema):
+    user_id = fields.Int(dump_only=True)
+    balance = fields.Float(dump_only=True)
+
+with app.app_context():
+    db.create_all()
 
 @app.route("/user", methods=["POST"])
 def create_user():
-    global user_id_counter
-    name = request.json.get("name")
-    if not name:
-        return jsonify({"error": "Name is required"}), 400
-    user_id = user_id_counter
-    data["users"][user_id] = {"id": user_id, "name": name}
-    user_id_counter += 1
-    return jsonify(data["users"][user_id]), 201
+    try:
+        data = request.get_json()
+        user_schema = UserSchema()
+        user_data = user_schema.load(data)
 
-@app.route("/user/<int:user_id>", methods=["GET"])
-def get_user(user_id):
-    user = data["users"].get(user_id)
-    if not user:
-        return jsonify({"error": "User not found"}), 404
-    return jsonify(user)
+        user = User(name=user_data['name'])
+        db.session.add(user)
+        db.session.commit()
 
-@app.route("/user/<int:user_id>", methods=["DELETE"])
-def delete_user(user_id):
-    if user_id not in data["users"]:
-        return jsonify({"error": "User not found"}), 404
-    del data["users"][user_id]
-    return "", 204
+        
+        account = Account()
+        user.account = account
+        db.session.add(account)
+        db.session.commit()
+
+        user_dumped = user_schema.dump(user)
+        return jsonify(user_dumped), 201
+    except ValidationError as err:
+        return jsonify(err.messages), 400
+    except Exception as e:
+        app.logger.error(f"Error in creating user: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/users", methods=["GET"])
 def get_users():
-    return jsonify(list(data["users"].values()))
+    try:
+        users = User.query.all()
+        user_schema = UserSchema(many=True)
+        users_dumped = user_schema.dump(users)
+        return jsonify(users_dumped)
+    except Exception as e:
+        app.logger.error(f"Error in fetching users: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/category", methods=["POST"])
 def create_category():
-    global category_id_counter
-    name = request.json.get("name")
-    if not name:
-        return jsonify({"error": "Name is required"}), 400
-    category_id = category_id_counter
-    data["categories"][category_id] = {"id": category_id, "name": name}
-    category_id_counter += 1
-    return jsonify(data["categories"][category_id]), 201
+    try:
+        data = request.get_json()
+        category_schema = CategorySchema()
+        category_data = category_schema.load(data)
 
-@app.route("/category", methods=["GET"])
-def get_categories():
-    return jsonify(list(data["categories"].values()))
+        category = Category(name=category_data['name'])
+        db.session.add(category)
+        db.session.commit()
 
-@app.route("/category", methods=["DELETE"])
-def delete_category():
-    category_id = request.json.get("id")
-    if not category_id or category_id not in data["categories"]:
-        return jsonify({"error": "Category not found"}), 404
-    del data["categories"][category_id]
-    return "", 204
+        category_dumped = category_schema.dump(category)
+        return jsonify(category_dumped), 201
+    except ValidationError as err:
+        return jsonify(err.messages), 400
+    except Exception as e:
+        app.logger.error(f"Error in creating category: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/record", methods=["POST"])
 def create_record():
-    global record_id_counter
-    user_id = request.json.get("user_id")
-    category_id = request.json.get("category_id")
-    amount = request.json.get("amount")
-    if not all([user_id, category_id, amount]):
-        return jsonify({"error": "User ID, Category ID, and Amount are required"}), 400
-    if user_id not in data["users"] or category_id not in data["categories"]:
-        return jsonify({"error": "Invalid User ID or Category ID"}), 400
-    record_id = record_id_counter
-    record = {
-        "id": record_id,
-        "user_id": user_id,
-        "category_id": category_id,
-        "timestamp": datetime.now().isoformat(),
-        "amount": amount,
-    }
-    data["records"][record_id] = record
-    record_id_counter += 1
-    return jsonify(record), 201
+    try:
+        data = request.get_json()
+        record_schema = RecordSchema()
+        record_data = record_schema.load(data)
 
-@app.route("/record/<int:record_id>", methods=["GET"])
-def get_record(record_id):
-    record = data["records"].get(record_id)
-    if not record:
-        return jsonify({"error": "Record not found"}), 404
-    return jsonify(record)
+        user = User.query.get(record_data['user_id'])
+        category = Category.query.get(record_data['category_id'])
+        if not user or not category:
+            return jsonify({"error": "Invalid User ID or Category ID"}), 400
 
-@app.route("/record/<int:record_id>", methods=["DELETE"])
-def delete_record(record_id):
-    if record_id not in data["records"]:
-        return jsonify({"error": "Record not found"}), 404
-    del data["records"][record_id]
-    return "", 204
+        account = user.account
+        if not account:
+            return jsonify({"error": "Account not found"}), 404
+
+        if account.balance < record_data['amount']:
+            return jsonify({"error": "Insufficient funds"}), 400
+
+        account.balance -= record_data['amount']
+        db.session.add(account)
+
+        record = Record(user_id=record_data['user_id'], category_id=record_data['category_id'], amount=record_data['amount'])
+        db.session.add(record)
+        db.session.commit()
+
+        record_dumped = record_schema.dump(record)
+        return jsonify(record_dumped), 201
+    except ValidationError as err:
+        return jsonify(err.messages), 400
+    except Exception as e:
+        app.logger.error(f"Error in creating record: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/record", methods=["GET"])
 def get_records():
-    user_id = request.args.get("user_id", type=int)
-    category_id = request.args.get("category_id", type=int)
+    try:
+        user_id = request.args.get("user_id", type=int)
+        category_id = request.args.get("category_id", type=int)
 
-    if user_id is None and category_id is None:
-        return jsonify({"error": "At least one filter parameter (user_id or category_id) is required"}), 400
+        query = Record.query
+        if user_id:
+            query = query.filter_by(user_id=user_id)
+        if category_id:
+            query = query.filter_by(category_id=category_id)
 
-    filtered_records = [
-        record
-        for record in data["records"].values()
-        if (user_id is None or record["user_id"] == user_id)
-        and (category_id is None or record["category_id"] == category_id)
-    ]
-    return jsonify(filtered_records)
+        records = query.all()
+        record_schema = RecordSchema(many=True)
+        records_dumped = record_schema.dump(records)
+        return jsonify(records_dumped)
+    except Exception as e:
+        app.logger.error(f"Error in fetching records: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/account/<int:user_id>", methods=["GET"])
+def get_account(user_id):
+    try:
+        account = Account.query.get(user_id)
+        if not account:
+            return jsonify({"error": "Account not found"}), 404
+        account_schema = AccountSchema()
+        account_dumped = account_schema.dump(account)
+        return jsonify(account_dumped)
+    except Exception as e:
+        app.logger.error(f"Error in fetching account: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/account/<int:user_id>/deposit", methods=["POST"])
+def deposit(user_id):
+    try:
+
+        amount = request.json.get("amount")
+        
+
+        if not amount or float(amount) <= 0:
+            return jsonify({"error": "Deposit amount must be greater than 0"}), 400
+        
+
+        amount = float(amount)
+        
+
+        account = Account.query.get(user_id)
+        if not account:
+            return jsonify({"error": "Account not found"}), 404
+        
+
+        account.balance += amount
+        db.session.add(account)
+        db.session.commit()
+
+        account_schema = AccountSchema()
+        account_dumped = account_schema.dump(account)
+        return jsonify(account_dumped)
+    except Exception as e:
+        app.logger.error(f"Error in deposit: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/healthcheck", methods=["GET"])
+def healthcheck():
+    try:
+        db.session.execute(text("SELECT 1"))
+        return jsonify({"status": "healthy"}), 200
+    except Exception as e:
+        app.logger.error(f"Healthcheck failed: {str(e)}")
+        return jsonify({"status": "unhealthy", "error": str(e)}), 500
+
+if __name__ == "__main__":
+    app.run(debug=True, host="0.0.0.0", port=80)
